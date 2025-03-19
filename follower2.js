@@ -17,6 +17,10 @@ let electionInProgress = false;
 
 const nodes = new Map();
 
+app.get("/get-leader", (req, res) => {
+  res.json({ leaderId });
+});
+
 app.use((req, res, next) => {
   if (isPartitioned) {
     return res.status(503).json({ error: "Nodo en partición de red" });

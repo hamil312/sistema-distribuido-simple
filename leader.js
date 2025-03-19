@@ -24,6 +24,32 @@ let electionInProgress = false;
 
 const nodes = new Map();
 
+async function checkCurrentLeader() {
+  for (const nodeUrl of Object.values(NODES)) {
+    if (nodeUrl !== NODES[NODE_ID]) {
+      try {
+        const response = await axios.get(`${nodeUrl}/get-leader`);
+        if (response.data.leaderId && response.data.leaderId !== NODE_ID) {
+          leaderId = response.data.leaderId;
+          console.log(`Nodo ${NODE_ID}: Detectado nuevo líder ${leaderId}. No asumiré liderazgo.`);
+          return;
+        }
+      } catch (error) {
+        console.log(`Nodo ${NODE_ID}: No pude contactar a ${nodeUrl} para obtener el líder.`);
+      }
+    }
+  }
+
+  console.log(`Nodo ${NODE_ID}: No se detectó líder. Iniciando elección...`);
+  startElection();
+}
+
+checkCurrentLeader();
+
+app.get("/get-leader", (req, res) => {
+  res.json({ leaderId });
+});
+
 app.post("/election", async (req, res) => {
   const { senderId } = req.body;
   if (senderId < NODE_ID) {
@@ -67,14 +93,22 @@ function startElection() {
   }
 }
 
-function declareAsLeader() {
+async function declareAsLeader() {
   leaderId = NODE_ID;
   console.log(`Nodo ${NODE_ID}: Soy el nuevo líder`);
-  Object.values(NODES).forEach(async (url) => {
+
+  const requests = Object.values(NODES).map(async (url) => {
     if (url !== NODES[NODE_ID]) {
-      await axios.post(`${url}/coordinator`, { leaderId: NODE_ID });
+      try {
+        await axios.post(`${url}/coordinator`, { leaderId: NODE_ID });
+      } catch (error) {
+        console.log(`Nodo ${NODE_ID}: Fallo al notificar a ${url}, reintentando...`);
+        setTimeout(() => axios.post(`${url}/coordinator`, { leaderId: NODE_ID }).catch(() => {}), 3000);
+      }
     }
   });
+
+  await Promise.all(requests);
 }
 
 setInterval(() => {
@@ -82,8 +116,15 @@ setInterval(() => {
     axios
       .get(`${NODES[leaderId]}/health`)
       .catch(() => {
-        console.log(`Nodo ${NODE_ID}: Líder ${leaderId} caído. Iniciando elección...`);
-        startElection();
+        console.log(`Nodo ${NODE_ID}: Líder ${leaderId} caído. Reintentando verificación...`);
+
+        setTimeout(() => {
+          axios.get(`${NODES[leaderId]}/health`)
+            .catch(() => {
+              console.log(`Nodo ${NODE_ID}: Confirmado fallo del líder ${leaderId}. Iniciando elección...`);
+              startElection();
+            });
+        }, 3000);
       });
   }
 }, 3000);
